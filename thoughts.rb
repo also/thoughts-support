@@ -1,52 +1,27 @@
+$: << File.dirname(__FILE__)
 require 'rubygems'
 require 'redcloth'
 require 'erb'
+require 'git'
 
 RedCloth::DEFAULT_RULES.replace [:markdown, :textile]
 
-HEAD = 'HEAD'
-
-class Git
-  def self.get_current_commit
-    Git.show_ref('-s',  HEAD).chomp
-  end
+class Entry
+  attr_reader :status
   
-  def self.commits_for_file(file_name)
-    Git.rev_list(HEAD, file_name).split
-  end
-  
-  def self.commits_for_period(period)
-    Git.rev_list("--since=\"#{period} ago\"", HEAD).split
-  end
-  
-  def self.method_missing(name, *args)
-    command = "git-#{name.to_s.gsub('_', '-')} #{args.join(' ')}"
-    puts "*exec \"#{command}\""
-    `#{command}`
-  end
-  
-  def self.files_changed(commit = HEAD)
-    changes = Git.diff_tree('-r', '--name-status', '--root', commit).split "\n"
-    changes.shift
-    added = []
-    changed = []
-    changes.each do |line|
-      change = line.split
-      if change[0] == 'A'
-        added << change[1]
-      else
-        changed << change[1]
-      end
-    end
-    
-    {:added => added, :changed => changed}
-  end
-end
-
-class Thought
-  def initialize(file_name, template)
+  def initialize(file_name, site)
     @file_name = file_name
-    @template = template
+    
+    @site = site
+    @status = :published
+  end
+  
+  def hidden?
+    @status == :hidden
+  end
+  
+  def draft?
+    @status == :draft
   end
   
   def update
@@ -54,55 +29,77 @@ class Thought
   end
   
   def uri
-    @file_name[0..-6]
+    slug
+  end
+  
+  def slug
+    @slug ||= @file_name[0..-6]
   end
   
   def html
-    unless @html
-      generate_html
-    end
-    @html
+    @html ||= RedCloth.new(markdown).to_html
   end
   
   def title
-    m = html.match '<h1>(.+)</h1>'
-    if m
-      m[1]
-    else
-      nil
+    markdown # parse the irb
+    @title ||= begin
+      m = html.match '<h1>(.+)</h1>'
+      if m
+        m[1]
+      else
+        nil
+      end
     end
   end
   
-  def generate_html
-    @html = RedCloth.new(IO.read(@file_name)).to_html()
+  def erb
+    @erb ||= ERB.new(IO.read("#{@site.repository_path}/#{@file_name}"))
+  end
+  
+  def markdown
+    @markdown ||= erb.result binding
   end
   
   def write_cached_html
-    FileUtils.mkdir_p File.dirname(".thoughts/cache/#{@file_name}.html")
-    file = File.new(".thoughts/cache/#{@file_name}.html", 'w')
-    file.puts @template.result(binding)
+    html_file_name = "#{@repository_path}/.thoughts/cache/#{slug}.html"
+    FileUtils.mkdir_p File.dirname(html_file_name)
+    file = File.new(html_file_name, 'w')
+    file.puts @site.individual_template.result(binding)
   end
   
-  def self.is_thought_file(file)
+  def self.is_entry_file(file)
     file[-5..-1] == '.text'
   end
 end
 
 class Site
-  def initialize
-    @individual_template = ERB.new(IO.read('.thoughts/thought.erb'))
-    @index_template = ERB.new(IO.read('.thoughts/index.erb'))
+  attr_reader :repository_path
+  
+  def initialize(repository_path)
+    @repository_path = repository_path
+    @repository = Git.new(repository_path)
   end
   
-  def update(previous_commit)
-    thoughts = []
-    changed_files = Git.diff_tree('-r', '--name-only', '--root', previous_commit, HEAD).split
+  def individual_template
+    @individual_template ||= ERB.new(IO.read("#{@repository_path}/.thoughts/entry.erb"))
+  end
+  
+  def index_template
+    @index_template ||= ERB.new(IO.read("#{@repository_path}/.thoughts/index.erb"))
+  end
+  
+  def update
+    previous_commit = @repository.current_commit
+    @repository.pull
+    
+    entries = []
+    changed_files = @repository.files_changed_since previous_commit
     changed_files.each do |file|
-      if Thought.is_thought_file file
-        thought = Thought.new(file, @individual_template)
-        thought.update
-        thoughts << thought
-        puts "Updated thought #{file}"
+      if Entry.is_entry_file file
+        entry = Entry.new(file, self)
+        entry.update
+        entries << entry
+        puts "Updated entry #{file}"
       end
     end
     
@@ -111,36 +108,30 @@ class Site
   
   def write_index
     puts 'Updating index'
-    commits = Git.commits_for_period '1 month'
-    thoughts = []
+    commits = @repository.commits_since '1 month ago'
+    entries = []
     commits.each do |commit|
-      files = Git.files_changed(commit)[:added]
+      files = @repository.files_changed_in(commit)[:added]
       files.each do |file|
-        if Thought.is_thought_file file
-          thoughts << Thought.new(file, @individual_template)
-          puts "Added #{file} to index"
+        if Entry.is_entry_file file
+          entry = Entry.new(file, self)
+          entries << entry
+          puts "Added \"#{entry.title}\" (#{file}) to index"
         end
       end
     end
     
-    file = File.new(".thoughts/cache/index.html", 'w')
-    file.puts @index_template.result(binding)
+    file = File.new("#{@repository_path}.thoughts/cache/index.html", 'w')
+    file.puts index_template.result(binding)
       
   end
-    
 end
-
-Dir.chdir(ARGV[0])
-ENV['GIT_WORK_TREE'] = ARGV[0]
-ENV['GIT_DIR'] = ARGV[0] + '/.git'
-previous_commit = Git.get_current_commit
-Git.pull
 
 case ARGV[1]
 when 'update'
-  puts 'Updating Thoughts'
-  Site.new.update previous_commit
+  puts 'Updating Entries'
+  Site.new(ARGV[0]).update
   puts 'Done'
 else
-  STDERR.puts "Invalid command #{ARGV[1]}"
+  $stderr.puts "Invalid command #{ARGV[1]}"
 end
