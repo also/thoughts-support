@@ -3,6 +3,7 @@ require 'rubygems'
 require 'redcloth'
 require 'erb'
 require 'git'
+require 'fileutils'
 
 RedCloth::DEFAULT_RULES.replace [:markdown, :textile]
 
@@ -61,7 +62,7 @@ class Entry
   end
   
   def write_cached_html
-    html_file_name = "#{@repository_path}/.thoughts/cache/#{slug}.html"
+    html_file_name = "#{@site.repository_path}/.thoughts/cache/#{slug}.html"
     FileUtils.mkdir_p File.dirname(html_file_name)
     file = File.new(html_file_name, 'w')
     file.puts @site.individual_template.result(binding)
@@ -88,8 +89,9 @@ class Site
     @index_template ||= ERB.new(IO.read("#{@repository_path}/.thoughts/index.erb"))
   end
   
-  def update
-    previous_commit = @repository.current_commit
+  def update previous_commit = nil
+    puts "Updating Entries in #{@repository_path}"
+    previous_commit ||= @repository.current_commit
     @repository.pull
     
     entries = []
@@ -121,7 +123,7 @@ class Site
       end
     end
     
-    file = File.new("#{@repository_path}.thoughts/cache/index.html", 'w')
+    file = File.new("#{@repository_path}/.thoughts/cache/index.html", 'w')
     file.puts index_template.result(binding)
       
   end
@@ -129,8 +131,7 @@ end
 
 case ARGV[1]
 when 'update'
-  puts 'Updating Entries'
-  Site.new(ARGV[0]).update
+  Site.new(ARGV[0]).update ARGV[2]
   puts 'Done'
 else
   $stderr.puts "Invalid command #{ARGV[1]}"

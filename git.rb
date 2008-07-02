@@ -68,7 +68,7 @@ class Git
       result = `#{command} 2>&1`
       
       raise "Git command failed: #{result}" if $? != 0
-      
+      puts result
       result
     end
   end
