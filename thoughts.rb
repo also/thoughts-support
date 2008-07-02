@@ -42,7 +42,7 @@ class Entry
   def title
     markdown # parse the irb
     @title ||= begin
-      m = html.match '<h1>(.+)</h1>'
+      m = html.match '<h1[^>]*>(.+)</h1>'
       if m
         m[1]
       else
