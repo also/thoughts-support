@@ -1,11 +1,9 @@
 $: << File.dirname(__FILE__)
 require 'rubygems'
-require 'redcloth'
+require 'maruku'
 require 'erb'
 require 'git'
 require 'fileutils'
-
-RedCloth::DEFAULT_RULES.replace [:markdown, :textile]
 
 class Entry
   attr_reader :status
@@ -38,7 +36,7 @@ class Entry
   end
   
   def html
-    @html ||= RedCloth.new(markdown).to_html
+    @html ||= Maruku.new(markdown).to_html
   end
   
   def title
